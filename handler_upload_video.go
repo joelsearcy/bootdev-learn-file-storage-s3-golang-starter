@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -90,7 +93,23 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Couldn't generate random bytes", err)
 	}
 
-	s3FileKey := fmt.Sprintf("%s.mp4", base64.RawURLEncoding.EncodeToString(randBytes))
+	aspectRatio, err := getVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't get video aspect ratio", err)
+		return
+	}
+	fmt.Println("Aspect ratio:", aspectRatio)
+	videoSchema := ""
+	switch aspectRatio {
+	case "16:9":
+		videoSchema = "landscape"
+	case "9:16":
+		videoSchema = "portrait"
+	default:
+		videoSchema = "other"
+	}
+
+	s3FileKey := fmt.Sprintf("%s/%s.mp4", videoSchema, base64.RawURLEncoding.EncodeToString(randBytes))
 
 	cfg.s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
@@ -113,4 +132,33 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Run()
+
+	type VideoStream struct {
+		Streams []struct {
+			Width       int    `json:"width"`
+			Height      int    `json:"height"`
+			AspectRatio string `json:"display_aspect_ratio"`
+		} `json:"streams"`
+	}
+
+	var data VideoStream
+	err := json.Unmarshal(out.Bytes(), &data)
+	if err != nil {
+		return "", err
+	}
+	if len(data.Streams) == 0 {
+		return "", fmt.Errorf("no streams found")
+	}
+	aspectRatio := data.Streams[0].AspectRatio
+	if aspectRatio == "9:16" || aspectRatio == "16:9" {
+		return aspectRatio, nil
+	}
+	return "other", nil
 }
