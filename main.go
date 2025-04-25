@@ -86,6 +86,9 @@ func main() {
 	}
 
 	s3Config, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(s3Region))
+	if err != nil {
+		log.Fatalf("Couldn't load AWS config: %v", err)
+	}
 	s3Client := s3.NewFromConfig(s3Config)
 
 	cfg := apiConfig{
